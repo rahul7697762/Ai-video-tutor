@@ -6,8 +6,8 @@ import ExplanationPanel from './components/ExplanationPanel'
 import LearningHistory from './components/LearningHistory'
 import './App.css'
 
-// API base URL - empty string uses Vite proxy in dev, change for production
-const API_BASE = ''
+// API base URL - uses VITE_API_URL in production, empty for dev (uses Vite proxy)
+const API_BASE = import.meta.env.VITE_API_URL || ''
 
 function App() {
   // Video state
