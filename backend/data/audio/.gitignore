@@ -1,0 +1,4 @@
+# This directory stores TTS audio cache files
+*.mp3
+*.wav
+*.ogg
