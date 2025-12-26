@@ -1,11 +1,12 @@
 """
 YouTube transcript extraction service.
-Uses youtube-transcript-api as primary, yt-dlp as fallback.
+Uses youtube-transcript-api as primary source.
 """
 
+import os
 from typing import Optional
 from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound
+from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound, VideoUnavailable
 import re
 
 from models.transcript import VideoTranscript, RawSegment
@@ -15,13 +16,11 @@ class TranscriptExtractor:
     """
     Extracts transcripts from YouTube videos.
     
-    Strategy:
-    1. Try official YouTube Transcript API (fastest)
-    2. Fall back to yt-dlp if needed
+    Uses youtube-transcript-api which works well on cloud servers.
     """
     
     def __init__(self):
-        self.preferred_languages = ["en", "en-US", "en-GB"]
+        self.preferred_languages = ["en", "en-US", "en-GB", "en-IN"]
         # Create instance of the API (new version uses instance methods)
         self.ytt_api = YouTubeTranscriptApi()
     
@@ -46,8 +45,14 @@ class TranscriptExtractor:
         )
         
         try:
-            # Try YouTube Transcript API
+            # Extract using YouTube Transcript API
             segments = await self._extract_youtube_api(video_id)
+            
+            if not segments:
+                transcript.status = "error"
+                transcript.error_message = "No transcript segments found"
+                return transcript
+                
             transcript.segments = segments
             transcript.status = "ready"
             
@@ -55,31 +60,39 @@ class TranscriptExtractor:
             if segments:
                 last = segments[-1]
                 transcript.duration = last.start + last.duration
-            
-        except (TranscriptsDisabled, NoTranscriptFound) as e:
+                
+        except TranscriptsDisabled:
             transcript.status = "error"
-            transcript.error_message = f"No transcript available: {str(e)}"
+            transcript.error_message = "Transcripts are disabled for this video"
+            
+        except NoTranscriptFound:
+            transcript.status = "error"
+            transcript.error_message = "No English transcript found for this video"
+            
+        except VideoUnavailable:
+            transcript.status = "error"
+            transcript.error_message = "Video is unavailable or private"
             
         except Exception as e:
-            # Try fallback
-            try:
-                segments = await self._extract_yt_dlp(video_id)
-                transcript.segments = segments
-                transcript.source = "yt_dlp"
-                transcript.status = "ready"
-                
-                if segments:
-                    last = segments[-1]
-                    transcript.duration = last.start + last.duration
-                    
-            except Exception as fallback_error:
+            error_msg = str(e).lower()
+            
+            # Handle specific YouTube/network errors
+            if "too many requests" in error_msg or "429" in error_msg:
                 transcript.status = "error"
-                transcript.error_message = f"Extraction failed: {str(e)}. Fallback: {str(fallback_error)}"
+                transcript.error_message = "Rate limited by YouTube. Please try again in a few minutes."
+            elif "sign in" in error_msg or "bot" in error_msg:
+                transcript.status = "error"
+                transcript.error_message = "YouTube requires authentication. Please try a different video."
+            else:
+                transcript.status = "error"
+                transcript.error_message = f"Failed to extract transcript: {str(e)}"
         
         return transcript
     
     async def _extract_youtube_api(self, video_id: str) -> list[RawSegment]:
         """Extract using youtube-transcript-api (new version with instance methods)."""
+        
+        segments = []
         
         # Try to list available transcripts first
         try:
@@ -92,7 +105,14 @@ class TranscriptExtractor:
                     selected_transcript = t
                     break
             
-            # If no preferred language found, use the first available
+            # If no preferred language found, try to find any English variant
+            if selected_transcript is None:
+                for t in transcript_list:
+                    if t.language_code.startswith("en"):
+                        selected_transcript = t
+                        break
+            
+            # If still no English, use the first available
             if selected_transcript is None and transcript_list:
                 selected_transcript = transcript_list[0]
             
@@ -102,12 +122,12 @@ class TranscriptExtractor:
             else:
                 # Fallback: try fetching directly with preferred languages
                 result = self.ytt_api.fetch(video_id, languages=self.preferred_languages)
+                
         except Exception:
             # Fallback: try fetching with default language
             result = self.ytt_api.fetch(video_id)
         
         # Convert snippets to segments
-        segments = []
         for snippet in result.snippets:
             segments.append(RawSegment(
                 text=self._clean_text(snippet.text),
@@ -116,45 +136,6 @@ class TranscriptExtractor:
             ))
         
         return segments
-    
-    async def _extract_yt_dlp(self, video_id: str) -> list[RawSegment]:
-        """Fallback extraction using yt-dlp."""
-        import yt_dlp
-        
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        
-        ydl_opts = {
-            "writesubtitles": True,
-            "writeautomaticsub": True,
-            "subtitleslangs": self.preferred_languages,
-            "skip_download": True,
-            "quiet": True,
-        }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            
-            # Get subtitle data
-            subtitles = info.get("subtitles", {}) or info.get("automatic_captions", {})
-            
-            # Find English subtitles
-            sub_data = None
-            for lang in self.preferred_languages:
-                if lang in subtitles:
-                    sub_data = subtitles[lang]
-                    break
-            
-            if not sub_data:
-                raise Exception("No subtitles found via yt-dlp")
-            
-            # Parse subtitle format (assuming json3 or vtt)
-            # This is a simplified parser - production code would handle more formats
-            segments = []
-            
-            # yt-dlp subtitle extraction is complex - for now, return empty
-            # In production, you'd parse the actual subtitle file
-            
-            return segments
     
     def _clean_text(self, text: str) -> str:
         """Clean transcript text."""
@@ -177,22 +158,12 @@ class TranscriptExtractor:
         return bool(re.match(r"^[a-zA-Z0-9_-]+$", video_id))
     
     async def get_video_info(self, video_id: str) -> dict:
-        """Get video metadata (title, channel, duration)."""
-        import yt_dlp
-        
-        url = f"https://www.youtube.com/watch?v={video_id}"
-        
-        ydl_opts = {
-            "skip_download": True,
-            "quiet": True,
+        """Get basic video metadata (without yt-dlp to avoid rate limits)."""
+        # Return minimal info - actual metadata can be fetched client-side
+        return {
+            "title": "",
+            "channel": "",
+            "duration": 0,
+            "thumbnail": f"https://img.youtube.com/vi/{video_id}/maxresdefault.jpg",
         }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            
-            return {
-                "title": info.get("title", ""),
-                "channel": info.get("channel", info.get("uploader", "")),
-                "duration": info.get("duration", 0),
-                "thumbnail": info.get("thumbnail", ""),
-            }
+
