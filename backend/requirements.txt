@@ -29,6 +29,10 @@ aiohttp>=3.9.1
 numpy>=1.26.0
 tenacity>=8.2.3
 
+# Video/Audio Processing
+moviepy>=1.0.3
+python-multipart>=0.0.6
+
 # Development
 pytest>=7.4.0
 pytest-asyncio>=0.23.0

@@ -173,6 +173,158 @@ async def upload_transcript(
     )
 
 
+@router.post("/upload-video", response_model=IngestResponse)
+async def upload_video(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    video_id: Optional[str] = Form(None),
+    video_title: Optional[str] = Form(None),
+    embedding_service: EmbeddingService = Depends(get_embedding_service),
+    vector_store: ChromaVectorStore = Depends(get_vector_store),
+):
+    """
+    Upload a video file for transcription and processing.
+    
+    Supported formats:
+    - MP4, MOV, AVI, MKV, WebM
+    
+    The video will be:
+    1. Audio extracted
+    2. Transcribed using Bytez or OpenAI Whisper
+    3. Processed into the RAG system
+    
+    Note: Max file size is 100MB. Larger files may timeout.
+    """
+    from services.transcript.video_transcriber import VideoTranscriber
+    
+    # Validate file type
+    allowed_extensions = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v', '.mp3', '.wav', '.m4a']
+    filename = file.filename or "video.mp4"
+    ext = '.' + filename.rsplit('.', 1)[-1].lower() if '.' in filename else '.mp4'
+    
+    if ext not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file format. Allowed: {', '.join(allowed_extensions)}"
+        )
+    
+    # Check file size (100MB limit for free tier)
+    content = await file.read()
+    max_size = 100 * 1024 * 1024  # 100MB
+    
+    if len(content) > max_size:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large. Maximum size is 100MB, got {len(content) / 1024 / 1024:.1f}MB"
+        )
+    
+    # Generate video_id if not provided
+    if not video_id:
+        video_id = f"video_{uuid.uuid4().hex[:11]}"
+    
+    # Mark as processing
+    video_status[video_id] = {
+        "status": "processing", 
+        "message": "Transcribing video (this may take a few minutes)..."
+    }
+    
+    # Queue background processing
+    background_tasks.add_task(
+        _process_video_upload,
+        video_content=content,
+        filename=filename,
+        video_id=video_id,
+        video_title=video_title or filename,
+        embedding_service=embedding_service,
+        vector_store=vector_store,
+    )
+    
+    return IngestResponse(
+        status="queued",
+        video_id=video_id,
+        message="Video uploaded. Transcription started in background..."
+    )
+
+
+async def _process_video_upload(
+    video_content: bytes,
+    filename: str,
+    video_id: str,
+    video_title: str,
+    embedding_service: EmbeddingService,
+    vector_store: ChromaVectorStore,
+):
+    """Background task for processing video upload."""
+    from services.transcript.video_transcriber import VideoTranscriber
+    
+    try:
+        video_status[video_id] = {"status": "processing", "message": "Extracting audio from video..."}
+        
+        # Transcribe video
+        transcriber = VideoTranscriber()
+        transcript = await transcriber.transcribe_video(video_content, filename, video_id)
+        
+        if transcript.status == "error":
+            video_status[video_id] = {
+                "status": "error",
+                "message": transcript.error_message or "Transcription failed"
+            }
+            return
+        
+        if not transcript.segments:
+            video_status[video_id] = {
+                "status": "error",
+                "message": "No speech detected in video"
+            }
+            return
+        
+        video_status[video_id] = {"status": "processing", "message": "Chunking transcript..."}
+        
+        # Chunk semantically
+        chunker = SemanticChunker(video_id=video_id)
+        chunks = chunker.chunk(transcript.segments)
+        
+        video_status[video_id] = {
+            "status": "processing",
+            "message": f"Generating embeddings for {len(chunks)} chunks..."
+        }
+        
+        # Generate embeddings
+        texts = [c.text_cleaned or c.text for c in chunks]
+        embeddings = await embedding_service.embed_batch(texts)
+        
+        for chunk, emb in zip(chunks, embeddings):
+            chunk.embedding = emb
+        
+        video_status[video_id] = {"status": "processing", "message": "Storing in vector database..."}
+        
+        # Store in vector database
+        await vector_store.upsert_chunks(chunks, video_metadata={
+            "video_id": video_id,
+            "title": video_title,
+            "duration": transcript.duration,
+            "source": "video_upload",
+        })
+        
+        # Update status
+        video_status[video_id] = {
+            "status": "ready",
+            "message": "Video transcription complete",
+            "total_chunks": len(chunks),
+            "title": video_title,
+            "duration": transcript.duration,
+        }
+        
+        print(f"✅ Transcribed video {video_id}: {len(chunks)} chunks")
+        
+    except Exception as e:
+        print(f"❌ Video transcription failed for {video_id}: {e}")
+        video_status[video_id] = {
+            "status": "error",
+            "message": str(e)
+        }
+
+
 async def _process_uploaded_transcript(
     transcript,
     video_title: str,

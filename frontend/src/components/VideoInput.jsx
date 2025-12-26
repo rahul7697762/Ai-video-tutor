@@ -1,9 +1,9 @@
 import { useState, useRef } from 'react'
-import { Search, Loader2, Upload, FileText, X } from 'lucide-react'
+import { Search, Loader2, Upload, FileText, Video, X } from 'lucide-react'
 
-function VideoInput({ onSubmit, onUpload, status, message }) {
+function VideoInput({ onSubmit, onUpload, onVideoUpload, status, message }) {
     const [url, setUrl] = useState('')
-    const [uploadMode, setUploadMode] = useState(false)
+    const [uploadMode, setUploadMode] = useState('url') // 'url', 'transcript', 'video'
     const [selectedFile, setSelectedFile] = useState(null)
     const [customTitle, setCustomTitle] = useState('')
     const fileInputRef = useRef(null)
@@ -18,25 +18,41 @@ function VideoInput({ onSubmit, onUpload, status, message }) {
     const handleFileSelect = (e) => {
         const file = e.target.files?.[0]
         if (file) {
-            // Validate file type
-            const validTypes = ['.srt', '.vtt', '.txt']
             const ext = '.' + file.name.split('.').pop()?.toLowerCase()
 
-            if (!validTypes.includes(ext)) {
-                alert('Please upload a .srt, .vtt, or .txt file')
-                return
+            if (uploadMode === 'transcript') {
+                const validTypes = ['.srt', '.vtt', '.txt']
+                if (!validTypes.includes(ext)) {
+                    alert('Please upload a .srt, .vtt, or .txt file')
+                    return
+                }
+            } else if (uploadMode === 'video') {
+                const validTypes = ['.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v', '.mp3', '.wav', '.m4a']
+                if (!validTypes.includes(ext)) {
+                    alert('Please upload a video or audio file (MP4, MOV, MP3, etc.)')
+                    return
+                }
+
+                // Check file size (100MB limit)
+                if (file.size > 100 * 1024 * 1024) {
+                    alert('File too large. Maximum size is 100MB.')
+                    return
+                }
             }
 
             setSelectedFile(file)
-            // Use filename as title suggestion
             setCustomTitle(file.name.replace(/\.[^/.]+$/, ''))
         }
     }
 
     const handleUpload = (e) => {
         e.preventDefault()
-        if (selectedFile && status !== 'loading' && onUpload) {
+        if (!selectedFile || status === 'loading') return
+
+        if (uploadMode === 'transcript' && onUpload) {
             onUpload(selectedFile, customTitle)
+        } else if (uploadMode === 'video' && onVideoUpload) {
+            onVideoUpload(selectedFile, customTitle)
         }
     }
 
@@ -48,29 +64,65 @@ function VideoInput({ onSubmit, onUpload, status, message }) {
         }
     }
 
+    const getAcceptTypes = () => {
+        if (uploadMode === 'transcript') {
+            return '.srt,.vtt,.txt'
+        }
+        return '.mp4,.mov,.avi,.mkv,.webm,.m4v,.mp3,.wav,.m4a'
+    }
+
+    const getUploadHint = () => {
+        if (uploadMode === 'transcript') {
+            return 'Supports: SRT, VTT, TXT'
+        }
+        return 'Supports: MP4, MOV, MP3, WAV (max 100MB)'
+    }
+
+    const getUploadText = () => {
+        if (uploadMode === 'transcript') {
+            return 'Click to upload transcript'
+        }
+        return 'Click to upload video/audio'
+    }
+
+    const getButtonText = () => {
+        if (uploadMode === 'transcript') {
+            return 'Process Transcript'
+        }
+        return 'Transcribe & Process'
+    }
+
     return (
         <div className="video-input-container">
-            {/* Toggle between URL and Upload modes */}
+            {/* Toggle between URL, Transcript, and Video modes */}
             <div className="input-mode-toggle">
                 <button
                     type="button"
-                    className={`mode-btn ${!uploadMode ? 'active' : ''}`}
-                    onClick={() => setUploadMode(false)}
+                    className={`mode-btn ${uploadMode === 'url' ? 'active' : ''}`}
+                    onClick={() => { setUploadMode('url'); clearFile() }}
                 >
                     <Search size={16} />
                     YouTube URL
                 </button>
                 <button
                     type="button"
-                    className={`mode-btn ${uploadMode ? 'active' : ''}`}
-                    onClick={() => setUploadMode(true)}
+                    className={`mode-btn ${uploadMode === 'transcript' ? 'active' : ''}`}
+                    onClick={() => { setUploadMode('transcript'); clearFile() }}
                 >
-                    <Upload size={16} />
-                    Upload Transcript
+                    <FileText size={16} />
+                    Transcript
+                </button>
+                <button
+                    type="button"
+                    className={`mode-btn ${uploadMode === 'video' ? 'active' : ''}`}
+                    onClick={() => { setUploadMode('video'); clearFile() }}
+                >
+                    <Video size={16} />
+                    Video/Audio
                 </button>
             </div>
 
-            {!uploadMode ? (
+            {uploadMode === 'url' ? (
                 /* YouTube URL Input */
                 <form onSubmit={handleSubmit}>
                     <div className="video-input-wrapper">
@@ -105,26 +157,37 @@ function VideoInput({ onSubmit, onUpload, status, message }) {
                                 <input
                                     type="file"
                                     ref={fileInputRef}
-                                    accept=".srt,.vtt,.txt"
+                                    accept={getAcceptTypes()}
                                     onChange={handleFileSelect}
                                     disabled={status === 'loading'}
                                     hidden
                                 />
-                                <Upload size={32} className="upload-icon" />
+                                {uploadMode === 'video' ? (
+                                    <Video size={32} className="upload-icon" />
+                                ) : (
+                                    <Upload size={32} className="upload-icon" />
+                                )}
                                 <span className="upload-text">
-                                    Click to upload transcript
+                                    {getUploadText()}
                                 </span>
                                 <span className="upload-hint">
-                                    Supports: SRT, VTT, TXT
+                                    {getUploadHint()}
                                 </span>
                             </label>
                         ) : (
                             <div className="selected-file">
-                                <FileText size={24} className="file-icon" />
+                                {uploadMode === 'video' ? (
+                                    <Video size={24} className="file-icon" />
+                                ) : (
+                                    <FileText size={24} className="file-icon" />
+                                )}
                                 <div className="file-info">
                                     <span className="file-name">{selectedFile.name}</span>
                                     <span className="file-size">
-                                        {(selectedFile.size / 1024).toFixed(1)} KB
+                                        {selectedFile.size > 1024 * 1024
+                                            ? `${(selectedFile.size / 1024 / 1024).toFixed(1)} MB`
+                                            : `${(selectedFile.size / 1024).toFixed(1)} KB`
+                                        }
                                     </span>
                                 </div>
                                 <button
@@ -158,7 +221,7 @@ function VideoInput({ onSubmit, onUpload, status, message }) {
                                 ) : (
                                     <Upload size={20} />
                                 )}
-                                <span>Process Transcript</span>
+                                <span>{getButtonText()}</span>
                             </button>
                         </>
                     )}

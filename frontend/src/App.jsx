@@ -122,6 +122,55 @@ function App() {
     }
   }, [])
 
+  // Handle video/audio file upload for transcription
+  const handleVideoUpload = useCallback(async (file, title) => {
+    setVideoReady(false)
+    setIngestionStatus('loading')
+    setIngestionMessage('Uploading video... This may take a few minutes to transcribe.')
+    setExplanation(null)
+
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      if (title) {
+        formData.append('video_title', title)
+      }
+
+      const response = await fetch(`${API_BASE}/api/transcript/upload-video`, {
+        method: 'POST',
+        body: formData,
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        setIngestionStatus('error')
+        setIngestionMessage(data.detail || 'Failed to upload video')
+        return
+      }
+
+      // Set the video ID from response
+      setVideoId(data.video_id)
+
+      if (data.status === 'queued' || data.status === 'processing') {
+        // Poll for completion (video transcription takes longer)
+        setIngestionMessage('Transcribing video... This may take a few minutes.')
+        pollIngestionStatus(data.video_id)
+      } else if (data.status === 'ready') {
+        setIngestionStatus('ready')
+        setIngestionMessage('Video transcribed! Ready for explanations.')
+        setVideoReady(true)
+      } else {
+        setIngestionStatus('error')
+        setIngestionMessage(data.message || 'Failed to transcribe video')
+      }
+    } catch (error) {
+      console.error('Video upload error:', error)
+      setIngestionStatus('error')
+      setIngestionMessage('Could not connect to server. Make sure the backend is running.')
+    }
+  }, [])
+
   // Poll for ingestion status
   const pollIngestionStatus = useCallback(async (id) => {
     let attempts = 0
@@ -261,6 +310,7 @@ function App() {
             <VideoInput
               onSubmit={handleVideoSubmit}
               onUpload={handleUpload}
+              onVideoUpload={handleVideoUpload}
               status={ingestionStatus}
               message={ingestionMessage}
             />
