@@ -74,6 +74,54 @@ function App() {
     }
   }, [])
 
+  // Handle transcript file upload
+  const handleUpload = useCallback(async (file, title) => {
+    setVideoReady(false)
+    setIngestionStatus('loading')
+    setIngestionMessage('Uploading and processing transcript...')
+    setExplanation(null)
+
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      if (title) {
+        formData.append('video_title', title)
+      }
+
+      const response = await fetch(`${API_BASE}/api/transcript/upload`, {
+        method: 'POST',
+        body: formData,
+      })
+
+      const data = await response.json()
+
+      if (!response.ok) {
+        setIngestionStatus('error')
+        setIngestionMessage(data.detail || 'Failed to upload transcript')
+        return
+      }
+
+      // Set the video ID from response
+      setVideoId(data.video_id)
+
+      if (data.status === 'queued' || data.status === 'processing') {
+        // Poll for completion
+        pollIngestionStatus(data.video_id)
+      } else if (data.status === 'ready') {
+        setIngestionStatus('ready')
+        setIngestionMessage('Transcript processed! Ready for explanations.')
+        setVideoReady(true)
+      } else {
+        setIngestionStatus('error')
+        setIngestionMessage(data.message || 'Failed to process transcript')
+      }
+    } catch (error) {
+      console.error('Upload error:', error)
+      setIngestionStatus('error')
+      setIngestionMessage('Could not connect to server. Make sure the backend is running.')
+    }
+  }, [])
+
   // Poll for ingestion status
   const pollIngestionStatus = useCallback(async (id) => {
     let attempts = 0
@@ -212,6 +260,7 @@ function App() {
 
             <VideoInput
               onSubmit={handleVideoSubmit}
+              onUpload={handleUpload}
               status={ingestionStatus}
               message={ingestionMessage}
             />
