@@ -38,16 +38,28 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Build CORS origins list
+cors_origins = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+]
+
+# Add production frontend URL from environment
+frontend_url = os.getenv("FRONTEND_URL", "")
+if frontend_url:
+    # Support comma-separated multiple URLs
+    for url in frontend_url.split(","):
+        url = url.strip()
+        if url:
+            cors_origins.append(url)
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://localhost:5173",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:5173",
-        "chrome-extension://*",
-    ],
+    allow_origins=cors_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app|https://.*\.netlify\.app|chrome-extension://.*",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

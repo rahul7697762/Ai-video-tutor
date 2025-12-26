@@ -9,10 +9,10 @@ from typing import Literal
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
-    # API Keys
-    OPENAI_API_KEY: str = "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"
-    ELEVENLABS_API_KEY: str = ""
-    ANTHROPIC_API_KEY: str = ""
+    # API Keys - Must be set via environment variables
+    OPENAI_API_KEY: str = ""  # Required: set via .env or environment
+    ELEVENLABS_API_KEY: str = ""  # Optional: for TTS
+    ANTHROPIC_API_KEY: str = ""  # Optional: for Claude LLM
     
     # Vector Store
     CHROMA_PERSIST_DIR: str = "./data/chroma"
